@@ -1,0 +1,41 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: durably
+      POSTGRES_USER: durably
+      POSTGRES_PASSWORD: durably
+    ports:
+      - '15432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U durably -d durably']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  server:
+    build:
+      context: .
+      target: runtime
+    environment:
+      DATABASE_URL: postgres://durably:durably@postgres:5432/durably
+      PORT: '3000'
+    command: ['node', 'packages/server/dist/main.js']
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - '3000:3000'
+
+  worker:
+    build:
+      context: .
+      target: runtime
+    environment:
+      DATABASE_URL: postgres://durably:durably@postgres:5432/durably
+      DURABLY_WORKER_LEASE_MS: '4000'
+      DURABLY_WORKER_REAPER_INTERVAL_MS: '1000'
+    command: ['node', 'packages/worker/dist/main.js']
+    depends_on:
+      postgres:
+        condition: service_healthy

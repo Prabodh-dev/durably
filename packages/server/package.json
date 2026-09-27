@@ -1,0 +1,18 @@
+{
+  "name": "@durably/server",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./dist/main.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@durably/core": "workspace:*",
+    "fastify": "^5.2.2",
+    "zod": "^3.24.2"
+  }
+}
