@@ -28,6 +28,7 @@ export async function runMigrations(
     const filePath = join(migrationsDir, fileName);
     const sql = await readFile(filePath, 'utf8');
     const client = await pool.connect();
+    client.on('error', () => undefined);
 
     try {
       await client.query('BEGIN');

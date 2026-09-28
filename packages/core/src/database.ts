@@ -9,6 +9,8 @@ import type {
   WorkflowStepRecord
 } from './types.js';
 import { createRetryPolicy, serializeError, systemClock } from './utils.js';
+import { createLogger } from './logging.js';
+import { DEFAULT_TENANT_ID, UnknownTenantError } from './tenancy.js';
 
 export type Database = {
   pool: Pool;
@@ -55,7 +57,17 @@ export type TaskDecision =
 
 export async function createDatabasePool(databaseUrl: string): Promise<Pool> {
   const { Pool } = await import('pg');
-  return new Pool({ connectionString: databaseUrl });
+  const pool = new Pool({ connectionString: databaseUrl });
+  // pg emits 'error' on the pool when an idle connection drops. Without a
+  // listener that emit is an unhandled error event and kills the process, so a
+  // database blip would take down a worker instead of letting it reconnect.
+  pool.on('error', (error) => {
+    createLogger().error(
+      { event: 'database_pool_error', error: serializeError(error) },
+      'idle database connection failed'
+    );
+  });
+  return pool;
 }
 
 async function withClient<T>(
@@ -63,6 +75,11 @@ async function withClient<T>(
   callback: (..._args: [PoolClient]) => Promise<T>
 ): Promise<T> {
   const client = await pool.connect();
+  // pg attaches no 'error' listener to a checked-out client, so a severed
+  // connection surfaces as an unhandled error event and takes the process
+  // down. The pending query already rejects with the same error, which is what
+  // the caller needs to see.
+  client.on('error', () => undefined);
   try {
     return await callback(client);
   } finally {
@@ -74,60 +91,12 @@ export async function createRun(
   pool: Pool,
   input: CreateRunInput
 ): Promise<WorkflowRunRecord> {
-  const tenantId = input.tenantId ?? 'default';
-  const taskMaxAttempts = input.taskMaxAttempts ?? 10;
-  const priority = input.priority ?? 0;
-
   return withClient(pool, async (client) => {
     await client.query('BEGIN');
     try {
-      if (input.idempotencyKey) {
-        const existing = await client.query<WorkflowRunRecord>(
-          'SELECT * FROM runs WHERE tenant_id = $1 AND idempotency_key = $2 LIMIT 1',
-          [tenantId, input.idempotencyKey]
-        );
-
-        if ((existing.rowCount ?? 0) > 0) {
-          await client.query('COMMIT');
-          return existing.rows[0] as WorkflowRunRecord;
-        }
-      }
-
-      const runId = randomUUID();
-      const runResult = await client.query<WorkflowRunRecord>(
-        `INSERT INTO runs (
-          id, tenant_id, workflow, input, status, idempotency_key, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, 'pending', $5, now(), now())
-        ON CONFLICT (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
-        RETURNING *`,
-        [
-          runId,
-          tenantId,
-          input.workflow,
-          input.input,
-          input.idempotencyKey ?? null
-        ]
-      );
-
-      if ((runResult.rowCount ?? 0) === 0) {
-        const existing = await client.query<WorkflowRunRecord>(
-          'SELECT * FROM runs WHERE tenant_id = $1 AND idempotency_key = $2 LIMIT 1',
-          [tenantId, input.idempotencyKey]
-        );
-        await client.query('COMMIT');
-        return existing.rows[0] as WorkflowRunRecord;
-      }
-
-      const taskId = randomUUID();
-      await client.query(
-        `INSERT INTO tasks (
-          id, run_id, tenant_id, run_at, status, priority, attempts, max_attempts
-        ) VALUES ($1, $2, $3, now(), 'ready', $4, 0, $5)`,
-        [taskId, runId, tenantId, priority, taskMaxAttempts]
-      );
-      await client.query("NOTIFY task_ready, 'created'");
+      const run = await createRunInTransaction(client, input);
       await client.query('COMMIT');
-      return runResult.rows[0] as WorkflowRunRecord;
+      return run;
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -135,10 +104,65 @@ export async function createRun(
   });
 }
 
+export async function createRunInTransaction(
+  client: PoolClient,
+  input: CreateRunInput
+): Promise<WorkflowRunRecord> {
+  const tenantId = input.tenantId ?? DEFAULT_TENANT_ID;
+  const taskMaxAttempts = input.taskMaxAttempts ?? 10;
+  const priority = input.priority ?? 0;
+
+  const tenant = await client.query<{ id: string }>(
+    'SELECT id FROM tenants WHERE id = $1 LIMIT 1',
+    [tenantId]
+  );
+  if ((tenant.rowCount ?? 0) === 0) {
+    throw new UnknownTenantError(tenantId);
+  }
+
+  if (input.idempotencyKey) {
+    const existing = await client.query<WorkflowRunRecord>(
+      'SELECT * FROM runs WHERE tenant_id = $1 AND idempotency_key = $2 LIMIT 1',
+      [tenantId, input.idempotencyKey]
+    );
+
+    if ((existing.rowCount ?? 0) > 0) {
+      return existing.rows[0] as WorkflowRunRecord;
+    }
+  }
+
+  const runId = randomUUID();
+  const runResult = await client.query<WorkflowRunRecord>(
+    `INSERT INTO runs (
+      id, tenant_id, workflow, input, status, idempotency_key, created_at, updated_at
+    ) VALUES ($1, $2, $3, $4, 'pending', $5, now(), now())
+    ON CONFLICT (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
+    RETURNING *`,
+    [runId, tenantId, input.workflow, input.input, input.idempotencyKey ?? null]
+  );
+
+  if ((runResult.rowCount ?? 0) === 0) {
+    const existing = await client.query<WorkflowRunRecord>(
+      'SELECT * FROM runs WHERE tenant_id = $1 AND idempotency_key = $2 LIMIT 1',
+      [tenantId, input.idempotencyKey]
+    );
+    return existing.rows[0] as WorkflowRunRecord;
+  }
+
+  await client.query(
+    `INSERT INTO tasks (
+      id, run_id, tenant_id, run_at, status, priority, attempts, max_attempts
+    ) VALUES ($1, $2, $3, now(), 'ready', $4, 0, $5)`,
+    [randomUUID(), runId, tenantId, priority, taskMaxAttempts]
+  );
+  await client.query("NOTIFY task_ready, 'created'");
+  return runResult.rows[0] as WorkflowRunRecord;
+}
+
 export async function getRun(
   pool: Pool,
   runId: string,
-  tenantId = 'default'
+  tenantId = DEFAULT_TENANT_ID
 ): Promise<WorkflowRunRecord | null> {
   const result = await pool.query<WorkflowRunRecord>(
     'SELECT * FROM runs WHERE id = $1 AND tenant_id = $2 LIMIT 1',
@@ -150,7 +174,7 @@ export async function getRun(
 export async function getRunWithSteps(
   pool: Pool,
   runId: string,
-  tenantId = 'default'
+  tenantId = DEFAULT_TENANT_ID
 ): Promise<{ run: WorkflowRunRecord | null; steps: WorkflowStepRecord[] }> {
   const runResult = await pool.query<WorkflowRunRecord>(
     'SELECT * FROM runs WHERE id = $1 AND tenant_id = $2 LIMIT 1',
@@ -220,7 +244,7 @@ export async function listDeadLetters(
 export async function cancelRun(
   pool: Pool,
   runId: string,
-  tenantId = 'default'
+  tenantId = DEFAULT_TENANT_ID
 ): Promise<WorkflowRunRecord | null> {
   return withClient(pool, async (client) => {
     await client.query('BEGIN');
@@ -256,7 +280,7 @@ export async function cancelRun(
 export async function markRunRunning(
   pool: Pool,
   runId: string,
-  tenantId = 'default'
+  tenantId = DEFAULT_TENANT_ID
 ): Promise<void> {
   await pool.query(
     `UPDATE runs
@@ -419,7 +443,7 @@ export async function failRunAndDeadLetter(
 export async function replayDeadLetter(
   pool: Pool,
   deadLetterId: string,
-  tenantId = 'default'
+  tenantId = DEFAULT_TENANT_ID
 ): Promise<boolean> {
   return withClient(pool, async (client) => {
     await client.query('BEGIN');
@@ -464,13 +488,18 @@ export async function replayDeadLetter(
   });
 }
 
+export type ReapResult = {
+  requeued: number;
+  deadLettered: number;
+};
+
 export async function reapExpiredTasks(
   pool: Pool,
   limit: number,
   now: Date = systemClock.now()
-): Promise<number> {
+): Promise<ReapResult> {
   if (limit <= 0) {
-    return 0;
+    return { requeued: 0, deadLettered: 0 };
   }
 
   return withClient(pool, async (client) => {
@@ -485,7 +514,7 @@ export async function reapExpiredTasks(
         [now, limit]
       );
 
-      let touched = 0;
+      const reaped: ReapResult = { requeued: 0, deadLettered: 0 };
       for (const task of result.rows) {
         if (task.attempts >= task.max_attempts) {
           const deadLetterResult = await client.query(
@@ -519,7 +548,7 @@ export async function reapExpiredTasks(
                 task
               ]
             );
-            touched += 1;
+            reaped.deadLettered += 1;
           }
           continue;
         }
@@ -542,12 +571,12 @@ export async function reapExpiredTasks(
             [task.run_id]
           );
           await client.query("NOTIFY task_ready, 'reaped'");
-          touched += 1;
+          reaped.requeued += 1;
         }
       }
 
       await client.query('COMMIT');
-      return touched;
+      return reaped;
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -592,6 +621,181 @@ export async function releaseWorkerLeases(
   });
 }
 
+export async function repairStuckRuns(
+  pool: Pool,
+  limit: number,
+  staleBefore: Date = systemClock.now()
+): Promise<string[]> {
+  if (limit <= 0) {
+    return [];
+  }
+
+  return withClient(pool, async (client) => {
+    await client.query('BEGIN');
+    try {
+      const repaired = await client.query<{ id: string; tenant_id: string }>(
+        `WITH stuck AS (
+           SELECT r.id AS run_id,
+                  r.tenant_id,
+                  COALESCE((SELECT max(t.priority) FROM tasks t WHERE t.run_id = r.id), 0) AS priority
+           FROM runs r
+           WHERE r.status IN ('pending', 'running', 'sleeping')
+             AND r.updated_at < $1
+             AND NOT EXISTS (
+               SELECT 1 FROM tasks t
+               WHERE t.run_id = r.id AND t.status IN ('ready', 'leased')
+             )
+           ORDER BY r.updated_at ASC
+           LIMIT $2
+           FOR UPDATE OF r SKIP LOCKED
+         )
+         UPDATE runs r
+         SET status = 'pending',
+             error = jsonb_build_object('reason', 'stuck_run_repaired'),
+             updated_at = now()
+         FROM stuck s
+         WHERE r.id = s.run_id
+         RETURNING r.id, r.tenant_id`,
+        [staleBefore, limit]
+      );
+
+      for (const row of repaired.rows) {
+        const priorityResult = await client.query<{ priority: number }>(
+          'SELECT COALESCE(max(priority), 0)::int AS priority FROM tasks WHERE run_id = $1',
+          [row.id]
+        );
+        await client.query(
+          `INSERT INTO tasks (
+             id, run_id, tenant_id, run_at, status, priority, attempts, max_attempts
+           ) VALUES ($1, $2, $3, now(), 'ready', $4, 0, 10)`,
+          [
+            randomUUID(),
+            row.id,
+            row.tenant_id,
+            priorityResult.rows[0]?.priority ?? 0
+          ]
+        );
+      }
+
+      if (repaired.rows.length > 0) {
+        await client.query("NOTIFY task_ready, 'repaired'");
+      }
+      await client.query('COMMIT');
+      return repaired.rows.map((row) => row.id);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    }
+  });
+}
+
+export async function sleepRunAndTask(
+  pool: Pool,
+  task: TaskRecord,
+  leaseToken: string,
+  wakeAt: Date,
+  now: Date = systemClock.now()
+): Promise<boolean> {
+  return withClient(pool, async (client) => {
+    await client.query('BEGIN');
+    try {
+      const taskResult = await client.query(
+        `UPDATE tasks
+         SET status = 'ready',
+             run_at = $3,
+             locked_by = NULL,
+             lease_token = NULL,
+             lease_expires_at = NULL,
+             last_error = NULL
+         WHERE id = $1 AND lease_token = $2 AND status = 'leased'`,
+        [task.id, leaseToken, wakeAt]
+      );
+
+      if ((taskResult.rowCount ?? 0) === 0) {
+        await client.query('ROLLBACK');
+        return false;
+      }
+
+      const runResult = await client.query(
+        `UPDATE runs
+         SET status = 'sleeping',
+             error = NULL,
+             updated_at = $2
+         WHERE id = $1 AND status IN ('pending', 'running', 'sleeping')`,
+        [task.run_id, now]
+      );
+
+      if ((runResult.rowCount ?? 0) === 0) {
+        await client.query('ROLLBACK');
+        return false;
+      }
+
+      await client.query('COMMIT');
+      return true;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    }
+  });
+}
+
+export async function recordSleepStep(
+  pool: Pool,
+  runId: string,
+  stepKey: string,
+  wakeAt: Date,
+  decidedAt: Date
+): Promise<{ wake_at: Date; created: boolean }> {
+  const inserted = await pool.query<{ wake_at: Date }>(
+    `INSERT INTO steps (
+       run_id, step_key, status, output, attempts, last_error,
+       started_at, finished_at, wake_at
+     ) VALUES ($1, $2, 'completed', $3, 1, NULL, $4, $4, $5)
+     ON CONFLICT (run_id, step_key) DO NOTHING
+     RETURNING wake_at`,
+    [runId, stepKey, { wake_at: wakeAt.toISOString() }, decidedAt, wakeAt]
+  );
+
+  if ((inserted.rowCount ?? 0) > 0 && inserted.rows[0]) {
+    return { wake_at: inserted.rows[0].wake_at, created: true };
+  }
+
+  const existing = await pool.query<{ wake_at: Date | null }>(
+    'SELECT wake_at FROM steps WHERE run_id = $1 AND step_key = $2 LIMIT 1',
+    [runId, stepKey]
+  );
+  const stored = existing.rows[0]?.wake_at;
+  if (!stored) {
+    throw new Error(`sleep step ${runId}:${stepKey} has no wake time`);
+  }
+  return { wake_at: stored, created: false };
+}
+
+export async function ensureRunTraceparent(
+  pool: Pool,
+  runId: string,
+  generate: () => string
+): Promise<string | null> {
+  const claimed = await pool.query<{ traceparent: string }>(
+    `UPDATE runs
+     SET traceparent = $2, updated_at = now()
+     WHERE id = $1 AND traceparent IS NULL
+     RETURNING traceparent`,
+    [runId, generate()]
+  );
+
+  const returned = claimed.rows[0]?.traceparent;
+  if (returned) {
+    return returned;
+  }
+
+  const existing = await pool.query<{ traceparent: string | null }>(
+    'SELECT traceparent FROM runs WHERE id = $1 LIMIT 1',
+    [runId]
+  );
+  return existing.rows[0]?.traceparent ?? null;
+}
+
 export async function claimTasks(
   pool: Pool,
   input: ClaimTasksInput
@@ -604,23 +808,77 @@ export async function claimTasks(
   const leaseExpiresAt = new Date(now.getTime() + input.leaseMs);
 
   const result = await pool.query<TaskRecord>(
-    `WITH picked AS (
-      SELECT id
-      FROM tasks
-      WHERE status = 'ready' AND run_at <= $2
-      ORDER BY priority DESC, run_at ASC
-      LIMIT $3
-      FOR UPDATE SKIP LOCKED
-    )
-    UPDATE tasks
-    SET status = 'leased',
-        locked_by = $1,
-        lease_token = gen_random_uuid(),
-        lease_expires_at = $4,
-        attempts = tasks.attempts + 1
-    FROM picked
-    WHERE tasks.id = picked.id
-    RETURNING tasks.*`,
+    `WITH running AS (
+       SELECT tenant_id, count(*)::int AS running
+       FROM tasks
+       WHERE status = 'leased'
+       GROUP BY tenant_id
+     ),
+     serving AS (
+       SELECT tenant.id AS tenant_id,
+              tenant.last_claim_at,
+              tenant.max_concurrent_tasks,
+              COALESCE(running.running, 0) AS running
+       FROM tenants tenant
+       LEFT JOIN running ON running.tenant_id = tenant.id
+       WHERE (tenant.max_concurrent_tasks = 0
+              OR COALESCE(running.running, 0) < tenant.max_concurrent_tasks)
+         AND EXISTS (
+           SELECT 1 FROM tasks ready
+           WHERE ready.tenant_id = tenant.id
+             AND ready.status = 'ready'
+             AND ready.run_at <= $2
+         )
+       ORDER BY tenant.last_claim_at ASC NULLS FIRST, tenant.id ASC
+       FOR UPDATE OF tenant SKIP LOCKED
+       LIMIT $3
+     ),
+     budget AS (
+       SELECT tenant_id,
+              last_claim_at,
+              LEAST(
+                CASE WHEN max_concurrent_tasks = 0 THEN $3::int
+                     ELSE GREATEST(0, max_concurrent_tasks - running) END,
+                GREATEST(1, $3::int / GREATEST((SELECT count(*)::int FROM serving), 1))
+              )::int AS share
+       FROM serving
+     ),
+     picked AS (
+       SELECT candidate.id
+       FROM budget
+       CROSS JOIN LATERAL (
+         SELECT task.id, task.priority, task.run_at,
+                budget.last_claim_at AS last_claim_at, budget.tenant_id AS tenant_id
+         FROM tasks task
+         WHERE task.tenant_id = budget.tenant_id
+           AND task.status = 'ready'
+           AND task.run_at <= $2
+         ORDER BY task.priority DESC, task.run_at ASC, task.id ASC
+         LIMIT budget.share
+         FOR UPDATE SKIP LOCKED
+       ) candidate
+       ORDER BY candidate.last_claim_at ASC NULLS FIRST,
+                candidate.tenant_id ASC,
+                candidate.priority DESC,
+                candidate.run_at ASC
+       LIMIT $3
+     ),
+     served AS (
+       UPDATE tenants tenant
+       SET last_claim_at = $2
+       WHERE tenant.id IN (SELECT tenant_id FROM serving)
+       RETURNING tenant.id
+     )
+     UPDATE tasks
+     SET status = 'leased',
+         locked_by = $1,
+         lease_token = gen_random_uuid(),
+         lease_expires_at = $4,
+         claimed_at = $2,
+         attempts = tasks.attempts + 1
+     FROM picked
+     WHERE tasks.id = picked.id
+     RETURNING tasks.*`,
     [input.workerId, now, input.limit, leaseExpiresAt]
   );
 

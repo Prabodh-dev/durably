@@ -1,6 +1,48 @@
 import { randomUUID } from 'node:crypto';
 
-import type { Clock, RetryPolicy } from './types.js';
+import type { Clock, DurationUnit, RetryPolicy } from './types.js';
+
+const DURATION_UNITS: Record<DurationUnit, number> = {
+  ms: 1,
+  s: 1000,
+  m: 60_000,
+  h: 3_600_000,
+  d: 86_400_000,
+  w: 604_800_000
+};
+
+const DURATION_PATTERN = /^(-?\d+(?:\.\d+)?)\s*(ms|s|m|h|d|w)$/i;
+
+export class InvalidDurationError extends Error {
+  public readonly input: string;
+
+  public constructor(input: string) {
+    super(
+      `invalid duration "${input}", expected a number followed by ms, s, m, h, d or w`
+    );
+    this.name = 'InvalidDurationError';
+    this.input = input;
+  }
+}
+
+export function parseDurationMs(value: string | number): number {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      throw new InvalidDurationError(String(value));
+    }
+    return value;
+  }
+
+  const match = DURATION_PATTERN.exec(value.trim());
+  const amount = match?.[1];
+  const unit = match?.[2]?.toLowerCase() as DurationUnit | undefined;
+  if (amount === undefined || unit === undefined) {
+    throw new InvalidDurationError(value);
+  }
+
+  const scale = DURATION_UNITS[unit];
+  return Number(amount) * scale;
+}
 
 export const systemClock: Clock = {
   now: () => new Date()

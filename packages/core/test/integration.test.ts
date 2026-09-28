@@ -457,7 +457,7 @@ describe.sequential('durably core', () => {
       1,
       new Date(Date.now() + 1000)
     );
-    expect(reaped).toBe(1);
+    expect(reaped).toEqual({ requeued: 1, deadLettered: 0 });
 
     const readyTasks = await context.pool.query(
       'SELECT count(*)::int AS count FROM tasks WHERE run_id = $1 AND status = $2',

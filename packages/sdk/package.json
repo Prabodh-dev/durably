@@ -11,6 +11,7 @@
     }
   },
   "dependencies": {
-    "@durably/core": "workspace:*"
+    "@durably/core": "workspace:*",
+    "@opentelemetry/api": "^1.9.1"
   }
 }
