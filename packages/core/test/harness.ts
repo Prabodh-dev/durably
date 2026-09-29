@@ -28,6 +28,20 @@ export type PostgresFixture = {
 };
 
 export async function startPostgres(): Promise<PostgresFixture> {
+  // The suite starts several containers at once and Docker occasionally stalls
+  // one of them. A single retry keeps that infrastructure noise out of results.
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await launchPostgres();
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
+async function launchPostgres(): Promise<PostgresFixture> {
   const container = await new GenericContainer('postgres:16-alpine')
     .withEnvironment({
       POSTGRES_DB: 'durably',
@@ -52,8 +66,6 @@ export async function startPostgres(): Promise<PostgresFixture> {
 export type ToxiproxyFixture = {
   container: StartedTestContainer;
   databaseUrl: string;
-  controlUrl: string;
-  proxyName: string;
   cutConnection(enabled: boolean): Promise<void>;
   setLatency(latencyMs: number): Promise<void>;
   stop(): Promise<void>;
@@ -63,7 +75,9 @@ export async function startToxiproxy(
   fixture: PostgresFixture,
   listenPort: number
 ): Promise<ToxiproxyFixture> {
-  const container = await new GenericContainer('ghcr.io/shopify/toxiproxy:2.9.0')
+  const container = await new GenericContainer(
+    'ghcr.io/shopify/toxiproxy:2.9.0'
+  )
     .withExposedPorts(8474, listenPort)
     .withWaitStrategy(Wait.forHttp('/version', 8474).forStatusCode(200))
     .start();
@@ -86,40 +100,53 @@ export async function startToxiproxy(
   const databaseUrl = `postgres://durably:durably@${container.getHost()}:${listenHostPort}/durably`;
   const toxicPath = `${controlUrl}/proxies/${proxyName}/toxics`;
 
+  const removeToxic = async (name: string): Promise<void> => {
+    const response = await fetch(`${toxicPath}/${encodeURIComponent(name)}`, {
+      method: 'DELETE'
+    });
+    if (!response.ok && response.status !== 404) {
+      throw new Error(
+        `failed to remove the ${name} toxic: ${await response.text()}`
+      );
+    }
+  };
+
+  const addToxic = async (toxic: {
+    name: string;
+    type: string;
+    stream: string;
+    toxicity: number;
+    attributes: Record<string, number>;
+  }): Promise<void> => {
+    const response = await fetch(toxicPath, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(toxic)
+    });
+    if (!response.ok) {
+      throw new Error(`failed to add ${toxic.name}: ${await response.text()}`);
+    }
+  };
+
   const removeLatency = async (): Promise<void> => {
-    const existing = await fetch(
-      `${controlPath(controlUrl, proxyName)}/toxics`,
-      {
-        method: 'GET'
-      }
-    );
-    if (!existing.ok) {
-      return;
-    }
-    const body = (await existing.json()) as Array<{ name: string }>;
-    for (const toxic of body) {
-      await fetch(`${toxicPath}/${encodeURIComponent(toxic.name)}`, {
-        method: 'DELETE'
-      });
-    }
+    await removeToxic('chaos-latency');
   };
 
   return {
     container,
     databaseUrl,
-    controlUrl,
-    proxyName,
     async cutConnection(enabled: boolean): Promise<void> {
-      const response = await fetch(controlPath(controlUrl, proxyName), {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ enabled })
-      });
-      if (!response.ok) {
-        throw new Error(
-          `failed to ${enabled ? 'cut' : 'restore'} the proxied connection: ${await response.text()}`
-        );
+      if (!enabled) {
+        await removeToxic('chaos-cut');
+        return;
       }
+      await addToxic({
+        name: 'chaos-cut',
+        type: 'timeout',
+        stream: 'downstream',
+        toxicity: 1,
+        attributes: { timeout: 0 }
+      });
     },
     async setLatency(latencyMs: number): Promise<void> {
       await removeLatency();
@@ -145,10 +172,6 @@ export async function startToxiproxy(
       await container.stop();
     }
   };
-}
-
-function controlPath(controlUrl: string, proxyName: string): string {
-  return `${controlUrl}/proxies/${proxyName}`;
 }
 
 export async function runMigrationsWithRetry(

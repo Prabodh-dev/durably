@@ -10,7 +10,11 @@ export default defineConfig({
     globals: true,
     include: ['packages/**/test/**/*.test.ts'],
     testTimeout: 120000,
-    hookTimeout: 120000
+    // Every file starts its own Postgres container, sometimes a Toxiproxy
+    // container as well. Running them all at once starves Docker and turns
+    // timing-sensitive tests into flakes, so the suite is deliberately narrow.
+    hookTimeout: 180000,
+    maxWorkers: 2
   },
   resolve: {
     alias: {

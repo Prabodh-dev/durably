@@ -55,9 +55,32 @@ export type TaskDecision =
   | { kind: 'retry'; error: unknown; delayMs: number }
   | { kind: 'dead-letter'; error: unknown; reason: string };
 
-export async function createDatabasePool(databaseUrl: string): Promise<Pool> {
+export type CreateDatabasePoolOptions = {
+  statementTimeoutMs?: number;
+};
+
+const DEFAULT_STATEMENT_TIMEOUT_MS = 30000;
+
+function defaultStatementTimeoutMs(): number {
+  const configured = Number(process.env.DURABLY_STATEMENT_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0
+    ? configured
+    : DEFAULT_STATEMENT_TIMEOUT_MS;
+}
+
+export async function createDatabasePool(
+  databaseUrl: string,
+  options?: CreateDatabasePoolOptions
+): Promise<Pool> {
   const { Pool } = await import('pg');
-  const pool = new Pool({ connectionString: databaseUrl });
+  const statementTimeoutMs =
+    options?.statementTimeoutMs ?? defaultStatementTimeoutMs();
+  const pool = new Pool({
+    connectionString: databaseUrl,
+    // A database that accepts a query and never answers would otherwise hang a
+    // worker forever, which is the one failure the reaper cannot rescue.
+    options: `-c statement_timeout=${statementTimeoutMs}`
+  });
   // pg emits 'error' on the pool when an idle connection drops. Without a
   // listener that emit is an unhandled error event and kills the process, so a
   // database blip would take down a worker instead of letting it reconnect.
@@ -79,10 +102,12 @@ async function withClient<T>(
   // connection surfaces as an unhandled error event and takes the process
   // down. The pending query already rejects with the same error, which is what
   // the caller needs to see.
-  client.on('error', () => undefined);
+  const swallowError = (): void => undefined;
+  client.on('error', swallowError);
   try {
     return await callback(client);
   } finally {
+    client.off('error', swallowError);
     client.release();
   }
 }

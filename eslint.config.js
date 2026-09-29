@@ -6,6 +6,7 @@ export default [
   {
     ignores: [
       '**/dist/**',
+      '**/.next/**',
       '**/src/**/*.js',
       '**/src/**/*.d.ts',
       '**/*.d.ts',

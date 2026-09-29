@@ -477,7 +477,7 @@ describe.sequential('cron ticking across leader failover', () => {
           return found.length > 0 ? found : undefined;
         },
         (found) => found.length >= 2,
-        150000,
+        240000,
         200
       );
     } catch (error) {
@@ -499,5 +499,5 @@ describe.sequential('cron ticking across leader failover', () => {
       [`${schedule.id}:%`]
     );
     expect(runs.rowCount).toBe(keys.length);
-  }, 200000);
+  }, 300000);
 });

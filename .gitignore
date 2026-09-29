@@ -5,3 +5,4 @@ coverage
 .env
 .env.*
 pnpm-lock.yaml
+.next

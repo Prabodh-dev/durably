@@ -296,7 +296,12 @@ export async function tickSchedules(
   now: Date = systemClock.now()
 ): Promise<ScheduleTickResult[]> {
   const client = await pool.connect();
-  client.on('error', () => undefined);
+  const swallowError = (): void => undefined;
+  client.on('error', swallowError);
+  const release = async (): Promise<void> => {
+    client.off('error', swallowError);
+    await client.release();
+  };
   const outcomes: ScheduleTickResult[] = [];
 
   try {
@@ -360,10 +365,10 @@ export async function tickSchedules(
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');
-    await client.release();
+    await release();
     throw error;
   }
 
-  await client.release();
+  await release();
   return outcomes;
 }

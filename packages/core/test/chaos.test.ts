@@ -7,7 +7,7 @@ import {
   expect,
   test
 } from 'vitest';
-import { Client } from 'pg';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import {
   createRun,
@@ -337,29 +337,15 @@ describe.sequential('chaos: database faults through toxiproxy', () => {
     expect(inFlight).toBe('in-flight');
 
     await toxiproxy.cutConnection(true);
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await sleep(2000);
     await toxiproxy.cutConnection(false);
 
     let finished;
     try {
       finished = await waitForCompletion(run.id, 60000);
     } catch (error) {
-      let probe = 'probe not run';
-      try {
-        const client = new Client({ connectionString: toxiproxy.databaseUrl });
-        await client.connect();
-        const result = await client.query<{ ok: number }>('SELECT 1 AS ok');
-        probe = `proxy reachable: ${JSON.stringify(result.rows)}`;
-        await client.end();
-      } catch (probeError) {
-        probe = `proxy unreachable: ${String(probeError)}`;
-      }
-      const state = await fetch(
-        `${toxiproxy.controlUrl}/proxies/${toxiproxy.proxyName}`
-      ).then((response) => response.text());
-      const logs = (await toxiproxy.container.getLogs()).slice(-15).join('\n');
       throw new Error(
-        `${String(error)}\n${probe}\nproxy state: ${state}\nproxy logs:\n${logs}\nworker exited: ${worker.exited()}\n${await runDiagnostics(run.id)}`
+        `${String(error)}\nworker exited: ${worker.exited()}\n${await runDiagnostics(run.id)}`
       );
     }
     expect(finished.run?.status).toBe('completed');

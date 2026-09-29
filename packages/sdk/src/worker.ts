@@ -702,7 +702,10 @@ export function createWorker(options: WorkerOptions): WorkerHandle {
       try {
         await client.query('UNLISTEN *');
       } catch (error) {
-        logger.warn({ event: 'listener_shutdown_failed', error: String(error) });
+        logger.warn({
+          event: 'listener_shutdown_failed',
+          error: String(error)
+        });
       } finally {
         client.release(true);
       }
