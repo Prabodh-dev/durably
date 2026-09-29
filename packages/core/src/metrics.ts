@@ -7,13 +7,7 @@ import {
 } from 'prom-client';
 import type { Pool } from 'pg';
 
-export const TASK_STATUSES = ['ready', 'leased', 'done'] as const;
-export const DEAD_LETTER_REASONS = [
-  'step_exhausted',
-  'task_exhausted',
-  'workflow_failed',
-  'lease_lost'
-] as const;
+const TASK_STATUSES = ['ready', 'leased', 'done'] as const;
 
 export type DurablyMetrics = {
   registry: Registry;

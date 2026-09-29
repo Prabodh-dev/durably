@@ -174,7 +174,7 @@ export async function startToxiproxy(
   };
 }
 
-export async function runMigrationsWithRetry(
+async function runMigrationsWithRetry(
   pool: Pool,
   targetDir: string
 ): Promise<void> {
@@ -285,7 +285,7 @@ export type SpawnWorkerOptions = {
   captureOutput?: boolean;
 };
 
-export function assertWorkerBuild(): void {
+function assertWorkerBuild(): void {
   if (!existsSync(workerMain)) {
     throw new Error(`worker build output not found at ${workerMain}`);
   }
@@ -381,27 +381,6 @@ export function createSilentLogger(
   bindings: Record<string, string> = {}
 ): Logger {
   return createLogger(bindings, { level: 'silent' });
-}
-
-export async function seedOnboardRun(
-  pool: Pool,
-  email: string,
-  idempotencyKey: string
-): Promise<string> {
-  const run = await createRun(pool, {
-    workflow: 'onboard-user',
-    input: { email, name: 'Test User', plan: 'pro' },
-    idempotencyKey
-  });
-  return run.id;
-}
-
-export async function readRunStatus(
-  pool: Pool,
-  runId: string
-): Promise<string | null> {
-  const details = await getRunWithSteps(pool, runId);
-  return details.run?.status ?? null;
 }
 
 export { sleep, migrationsDir, workerMain };

@@ -146,7 +146,9 @@ dead letter and schedule tables. It reads `DURABLY_API_URL` and, when the API re
 `DURABLY_API_KEY`. Every page is server rendered and fetches on each request, so the numbers are the
 current state of the database rather than a cached snapshot.
 
-## Limitations
+## Known limitations
+
+### Execution
 
 - A run is executed by replaying its function. A function with side effects outside a step runs
   those side effects on every replay; they must live inside steps and use the idempotency key.
@@ -158,3 +160,28 @@ current state of the database rather than a cached snapshot.
   the tick rate rather than instantly.
 - Traces are persisted per run, not per step. Step level spans are emitted but only the run level
   context survives a crash.
+- Workflows are plain functions with no versioning story. Changing a workflow that has runs in
+  flight can change what those runs do when they are replayed, because replay is a fresh execution of
+  the current code.
+
+### Operations
+
+- The API server drains in-flight HTTP requests on SIGTERM and closes its pool, but it has no
+  request queue, so a deployment behind a load balancer can still drop connections that arrive
+  during the grace period.
+- The worker exits once its leases are released and its duty timers drain. A step in flight is
+  abandoned and reaped, which is correct but means shutdown latency depends on how fast
+  `worker.stop()` returns.
+- Leadership is held for as long as the process lives and the connection stays up. A paused
+  container holding the advisory lock stalls the reaper and the cron ticker for the whole cluster
+  until the connection drops.
+- There is no structured audit log of administrative actions. Tenant creation and API key issuance
+  are not recorded anywhere except the database row they create.
+- The dashboard is read only. Runs cannot be cancelled or replayed from it, and dead letter replay
+  is an API call with no UI.
+- Metrics for leadership, lease expirations, and dead letters are process local. A server that
+  never claimed a task reports zero lease expirations regardless of what the workers did; only the
+  worker that performed the work counts it.
+- `statement_timeout` applies to every pooled connection, so a legitimately long running query on a
+  connection created by `createDatabasePool` is killed at 30 seconds by default. There is no separate
+  long-running query path.

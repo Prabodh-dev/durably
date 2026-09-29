@@ -6,13 +6,7 @@ import {
   context as otelContext,
   trace
 } from '@opentelemetry/api';
-import type {
-  Context,
-  Span,
-  TextMapGetter,
-  TextMapSetter,
-  Tracer
-} from '@opentelemetry/api';
+import type { Context, Span, TextMapGetter, Tracer } from '@opentelemetry/api';
 import { W3CTraceContextPropagator } from '@opentelemetry/core';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
 import { resourceFromAttributes } from '@opentelemetry/resources';
@@ -97,12 +91,6 @@ const CARRIER_GETTER: TextMapGetter<Record<string, string>> = {
   get: (carrier, key) => carrier[key]
 };
 
-const CARRIER_SETTER: TextMapSetter<Record<string, string>> = {
-  set: (carrier, key, value) => {
-    carrier[key] = value;
-  }
-};
-
 export function createRunTraceparent(): string {
   const traceId = randomHex(16);
   const spanId = randomHex(8);
@@ -115,12 +103,6 @@ export function extractTraceContext(traceparent: string): Context {
     { traceparent },
     CARRIER_GETTER
   );
-}
-
-export function activeTraceparent(): string | undefined {
-  const carrier: Record<string, string> = {};
-  TRACE_PROPAGATOR.inject(otelContext.active(), carrier, CARRIER_SETTER);
-  return carrier.traceparent;
 }
 
 export function startRunSpan(

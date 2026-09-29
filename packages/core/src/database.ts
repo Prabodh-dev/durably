@@ -8,7 +8,7 @@ import type {
   WorkflowRunRecord,
   WorkflowStepRecord
 } from './types.js';
-import { createRetryPolicy, serializeError, systemClock } from './utils.js';
+import { serializeError, systemClock } from './utils.js';
 import { createLogger } from './logging.js';
 import { DEFAULT_TENANT_ID, UnknownTenantError } from './tenancy.js';
 
@@ -941,79 +941,6 @@ export async function markTaskDone(
   return (result.rowCount ?? 0) > 0;
 }
 
-export async function rescheduleTask(
-  pool: Pool,
-  taskId: string,
-  leaseToken: string,
-  delayMs: number,
-  error: unknown,
-  now: Date = systemClock.now()
-): Promise<boolean> {
-  const nextRunAt = new Date(now.getTime() + delayMs);
-  const result = await pool.query(
-    `UPDATE tasks
-     SET status = 'ready',
-         run_at = $3,
-         locked_by = NULL,
-         lease_token = NULL,
-         lease_expires_at = NULL,
-         last_error = $4
-     WHERE id = $1 AND lease_token = $2 AND status = 'leased'`,
-    [taskId, leaseToken, nextRunAt, serializeError(error)]
-  );
-  return (result.rowCount ?? 0) > 0;
-}
-
-export async function deadLetterTask(
-  pool: Pool,
-  task: TaskRecord,
-  reason: string,
-  error: unknown,
-  payload: unknown,
-  leaseToken: string
-): Promise<boolean> {
-  return withClient(pool, async (client) => {
-    await client.query('BEGIN');
-    try {
-      const result = await client.query(
-        `UPDATE tasks
-         SET status = 'done',
-             locked_by = NULL,
-             lease_token = NULL,
-             lease_expires_at = NULL,
-             last_error = $3
-         WHERE id = $1 AND lease_token = $2 AND status = 'leased'`,
-        [task.id, leaseToken, serializeError(error)]
-      );
-
-      if (result.rowCount === 0) {
-        await client.query('ROLLBACK');
-        return false;
-      }
-
-      await client.query(
-        `INSERT INTO dead_letters (
-          id, run_id, task_id, tenant_id, reason, error, payload, created_at, replayed_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, now(), NULL)`,
-        [
-          randomUUID(),
-          task.run_id,
-          task.id,
-          task.tenant_id,
-          reason,
-          serializeError(error),
-          payload
-        ]
-      );
-      await client.query('COMMIT');
-      return true;
-    } catch (innerError) {
-      await client.query('ROLLBACK');
-      throw innerError;
-    }
-  });
-}
-
 export async function recordStepFailure(
   pool: Pool,
   runId: string,
@@ -1070,43 +997,4 @@ export async function recordStepSuccess<T>(
     [runId, stepKey]
   );
   return (existing.rows[0]?.output as T) ?? output;
-}
-
-export async function getStep(
-  pool: Pool,
-  runId: string,
-  stepKey: string
-): Promise<WorkflowStepRecord | null> {
-  const result = await pool.query<WorkflowStepRecord>(
-    'SELECT * FROM steps WHERE run_id = $1 AND step_key = $2 LIMIT 1',
-    [runId, stepKey]
-  );
-  return result.rows[0] ?? null;
-}
-
-export async function listSteps(
-  pool: Pool,
-  runId: string
-): Promise<WorkflowStepRecord[]> {
-  const result = await pool.query<WorkflowStepRecord>(
-    'SELECT * FROM steps WHERE run_id = $1 ORDER BY started_at ASC',
-    [runId]
-  );
-  return result.rows;
-}
-
-export function createTaskDecisionFromFailure(
-  attempts: number,
-  policy: ReturnType<typeof createRetryPolicy>,
-  error: unknown,
-  random: () => number = Math.random
-): TaskDecision {
-  if (attempts >= policy.maxAttempts) {
-    return { kind: 'dead-letter', error, reason: 'step_exhausted' };
-  }
-
-  const delayMs = Math.floor(
-    random() * Math.min(policy.maxDelayMs, policy.baseDelayMs * 2 ** attempts)
-  );
-  return { kind: 'retry', error, delayMs };
 }

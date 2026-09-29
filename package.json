@@ -1,8 +1,14 @@
 {
   "name": "durably",
+  "version": "0.1.0",
   "private": true,
+  "description": "Durable workflow and job engine backed by PostgreSQL",
+  "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc -b",
     "lint": "eslint .",
@@ -24,23 +30,6 @@
   },
   "dependencies": {
     "@durably/core": "workspace:*",
-    "@durably/sdk": "workspace:*",
-    "@durably/server": "workspace:*",
-    "@durably/worker": "workspace:*",
-    "@opentelemetry/api": "^1.9.1",
-    "@opentelemetry/exporter-trace-otlp-proto": "^0.222.0",
-    "@opentelemetry/resources": "^2.11.0",
-    "@opentelemetry/sdk-trace-base": "^2.11.0",
-    "@opentelemetry/sdk-trace-node": "^2.11.0",
-    "@opentelemetry/semantic-conventions": "^1.43.0",
-    "cron-parser": "^5.3.0",
-    "fastify": "^5.2.2",
-    "pg": "^8.14.1",
-    "pino": "^9.6.0",
-    "prom-client": "^15.1.3",
-    "zod": "^3.24.2"
-  },
-  "workspaces": [
-    "packages/*"
-  ]
+    "pg": "^8.14.1"
+  }
 }

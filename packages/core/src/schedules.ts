@@ -55,7 +55,7 @@ export function scheduleFireKey(scheduleId: string, fireTime: Date): string {
   return `${scheduleId}:${fireTime.toISOString()}`;
 }
 
-export function assertValidCron(expression: string, timezone: string): void {
+function assertValidCron(expression: string, timezone: string): void {
   try {
     CronExpressionParser.parse(expression, { tz: timezone });
   } catch (error) {
@@ -63,7 +63,7 @@ export function assertValidCron(expression: string, timezone: string): void {
   }
 }
 
-export function assertValidTimezone(timezone: string): void {
+function assertValidTimezone(timezone: string): void {
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: timezone });
   } catch (error) {
@@ -94,7 +94,7 @@ export type OccurrenceScan = {
   truncated: boolean;
 };
 
-export function scanOccurrences(
+function scanOccurrences(
   expression: string,
   timezone: string,
   from: Date,

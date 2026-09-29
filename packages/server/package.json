@@ -1,6 +1,8 @@
 {
   "name": "@durably/server",
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "HTTP API for durably",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/main.js",
   "types": "./dist/index.d.ts",
@@ -9,6 +11,9 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
+  },
+  "engines": {
+    "node": ">=20"
   },
   "dependencies": {
     "@durably/core": "workspace:*",

@@ -80,16 +80,32 @@ const worker = createWorker({
   ...(workerId ? { workerId } : {})
 });
 
-const shutdown = async () => {
-  await worker.stop();
-  await telemetry.shutdown();
-  if (metricsServer) {
-    await metricsServer.close();
+let shuttingDown = false;
+
+const shutdown = async (signal: string): Promise<void> => {
+  if (shuttingDown) {
+    return;
   }
-  process.exit(0);
+  shuttingDown = true;
+  logger.info({ signal }, 'shutting down');
+  try {
+    await worker.stop();
+    await telemetry.shutdown();
+    if (metricsServer) {
+      await metricsServer.close();
+    }
+    process.exit(0);
+  } catch (error) {
+    logger.error({ err: error }, 'shutdown failed');
+    process.exit(1);
+  }
 };
 
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+process.on('SIGTERM', () => {
+  void shutdown('SIGTERM');
+});
+process.on('SIGINT', () => {
+  void shutdown('SIGINT');
+});
 
 await worker.start();

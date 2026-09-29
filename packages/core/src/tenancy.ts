@@ -53,11 +53,11 @@ export function hashApiKey(secret: string): string {
   return createHash('sha256').update(secret, 'utf8').digest('hex');
 }
 
-export function generateApiKeySecret(): string {
+function generateApiKeySecret(): string {
   return `dk_${randomBytes(32).toString('base64url')}`;
 }
 
-export function apiKeyLookupPrefix(secret: string): string {
+function apiKeyLookupPrefix(secret: string): string {
   return secret.slice(0, API_KEY_PREFIX_LENGTH);
 }
 

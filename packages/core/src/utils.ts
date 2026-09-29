@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-
 import type { Clock, DurationUnit, RetryPolicy } from './types.js';
 
 const DURATION_UNITS: Record<DurationUnit, number> = {
@@ -63,10 +61,6 @@ export function computeBackoffDelayMs(
 ): number {
   const capped = Math.min(policy.maxDelayMs, policy.baseDelayMs * 2 ** attempt);
   return Math.floor(random() * capped);
-}
-
-export function createLeaseToken(): string {
-  return randomUUID();
 }
 
 export function serializeError(error: unknown): unknown {

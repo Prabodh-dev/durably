@@ -1,6 +1,8 @@
 {
   "name": "@durably/worker",
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "Worker process and sample workflows for durably",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/main.js",
   "types": "./dist/index.d.ts",
@@ -10,8 +12,10 @@
       "default": "./dist/index.js"
     }
   },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
-    "@durably/sdk": "workspace:*",
-    "pg": "^8.23.0"
+    "@durably/sdk": "workspace:*"
   }
 }

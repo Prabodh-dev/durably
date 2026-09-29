@@ -1,7 +1,12 @@
 {
   "name": "@durably/dashboard",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
+  "description": "Operator dashboard for durably",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",

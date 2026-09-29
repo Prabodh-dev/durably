@@ -1,8 +1,15 @@
 node_modules
 dist
+build
 coverage
 .DS_Store
+*.log
 .env
 .env.*
-pnpm-lock.yaml
+!.env.example
 .next
+next-env.d.ts
+*.tsbuildinfo
+ops/grafana/data
+ops/prometheus/data
+postgres-data

@@ -20,12 +20,25 @@ services:
     environment:
       DATABASE_URL: postgres://durably:durably@postgres:5432/durably
       PORT: '3000'
+      DURABLY_ADMIN_KEY: ${DURABLY_ADMIN_KEY:-}
+      DURABLY_REQUIRE_API_KEY: ${DURABLY_REQUIRE_API_KEY:-false}
     command: ['node', 'packages/server/dist/main.js']
     depends_on:
       postgres:
         condition: service_healthy
     ports:
       - '3000:3000'
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    stop_grace_period: 20s
 
   worker:
     build:
@@ -43,6 +56,17 @@ services:
         condition: service_healthy
     expose:
       - '9090'
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:9090/metrics').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    stop_grace_period: 30s
 
   prometheus:
     image: prom/prometheus:v2.54.1

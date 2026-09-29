@@ -29,10 +29,3 @@ export function createLogger(
     }
   });
 }
-
-export function childLogger(logger: Logger, fields: LogFields): Logger {
-  const child = Object.fromEntries(
-    Object.entries(fields).filter(([, value]) => value !== undefined)
-  );
-  return logger.child(child);
-}

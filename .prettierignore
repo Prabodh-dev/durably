@@ -1,2 +1,8 @@
-apps/dashboard/next-env.d.ts
-apps/dashboard/.next
+node_modules
+dist
+build
+coverage
+.next
+next-env.d.ts
+*.tsbuildinfo
+pnpm-lock.yaml
